@@ -432,6 +432,67 @@ body {
   line-height: 1.4;
 }
 
+.checker-ok {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid #10b981;
+  color: #d1fae5;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+
+.checker-icon-ok {
+  color: #34d399;
+  font-weight: 800;
+}
+
+.checker-results .issue-card {
+  margin-bottom: 8px;
+  padding: 8px 10px;
+}
+
+.checker-results .issue-error { border-left: 3px solid #ef4444; }
+.checker-results .issue-warn { border-left: 3px solid #f59e0b; }
+.checker-results .issue-info { border-left: 3px solid #38bdf8; }
+
+.issue-header {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin-bottom: 4px;
+}
+
+.issue-why,
+.issue-fix {
+  margin-top: 3px;
+}
+
+.issue-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.issue-btn {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 11px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.issue-btn.fix-btn {
+  background: #0e7490;
+  color: white;
+  border-color: #0e7490;
+}
+
 .inspector-header {
   padding: 14px 16px;
   border-bottom: 1px solid var(--border-color);

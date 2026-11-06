@@ -5,7 +5,7 @@
 
 import { CircuitGraph } from '../core/CircuitGraph.js';
 import { createWire } from '../core/WireModel.js';
-import { createComponent, calculateResistorBands } from '../core/ComponentModel.js';
+import { createComponent, calculateResistorBands, formatCapacitance, formatInductance } from '../core/ComponentModel.js';
 
 export class StateManager {
   constructor(breadboard) {
@@ -202,10 +202,8 @@ export class StateManager {
         return null;
       }
       const targetRowId = rowOrder[targetRowIndex];
-      const targetHoleId =
-        targetRowId.startsWith('T') || targetRowId.startsWith('B')
-          ? `${targetRowId}-${targetCol}`
-          : `${targetCol}-${targetRowId}`;
+      const isRail = targetRowId === 'TP' || targetRowId === 'TN' || targetRowId === 'BP' || targetRowId === 'BN';
+      const targetHoleId = isRail ? `${targetRowId}-${targetCol}` : `${targetCol}-${targetRowId}`;
       const hole = this.bb.holes.get(targetHoleId);
       if (!hole) return null;
       return { id: pin.id, name: pin.name, holeId: hole.id, x: hole.x, y: hole.y, stripId: hole.stripId };
@@ -481,11 +479,32 @@ export class StateManager {
     if (comp.type === 'resistor') {
       comp.properties.colorBands = calculateResistorBands(newValue);
       comp.displayValue = `${newValue} Ω`;
+    } else if (comp.type === 'capacitor') {
+      comp.displayValue = formatCapacitance(newValue);
+    } else if (comp.type === 'inductor') {
+      comp.displayValue = formatInductance(newValue);
     } else if (comp.type === 'potentiometer' || comp.type === 'rheostat') {
       comp.properties.maxResistance = newValue;
       comp.properties.activeResistance = Math.round(newValue * (comp.properties.wiperPos ?? 0.5));
     }
     this.notify();
+  }
+
+  swapPins(componentId, pinA, pinB) {
+    const comp = this.components.find((c) => c.id === componentId);
+    if (!comp) return false;
+    const a = comp.pins.find((p) => p.id === pinA);
+    const b = comp.pins.find((p) => p.id === pinB);
+    if (!a || !b) return false;
+    this.snapshot();
+    for (const key of ['holeId', 'relCol', 'relRow', 'x', 'y']) {
+      const tmp = a[key];
+      a[key] = b[key];
+      b[key] = tmp;
+    }
+    this.rebuildOccupancy();
+    this.notify();
+    return true;
   }
 
   setPotWiper(componentId, wiperPos) {
