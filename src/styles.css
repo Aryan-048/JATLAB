@@ -158,6 +158,12 @@ body {
   transition: all 0.15s ease;
 }
 
+.tool-btn.active {
+  background-color: var(--accent-cyan);
+  color: #0F172A;
+  border-color: var(--accent-cyan);
+}
+
 .tool-btn:hover {
   background-color: var(--bg-tertiary);
   border-color: var(--border-light);

@@ -38,6 +38,25 @@ export class PropertyInspector {
         return;
       }
       this.renderWireInspector(wire);
+    } else if (selected.type === 'hole') {
+      const hole = this.bb.holes.get(selected.id);
+      if (!hole) {
+        this.renderEmptyState();
+        return;
+      }
+      const mates = this.bb.getHolesInStrip(hole.id).map((h) => h.id).join(', ');
+      const net = this.state.circuitGraph.getNetForHole(hole.id);
+      this.container.innerHTML = `
+        <div class="inspector-header">
+          <div class="inspector-title">Hole ${hole.id}</div>
+          <div class="inspector-badge">Strip</div>
+        </div>
+        <div class="inspector-body">
+          <p class="inspector-hint">Net ${net}. Connected holes: ${mates}.</p>
+        </div>
+      `;
+    } else {
+      this.renderEmptyState();
     }
   }
 

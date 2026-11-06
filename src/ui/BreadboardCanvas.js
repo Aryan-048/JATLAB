@@ -3,6 +3,60 @@
  * Parts 1 & 2: Arc wires, proper layering, wire/hole hit priority, fade-wires, end-handle drag
  */
 
+export const HOLE_HIT_RADIUS = 8;
+export const WIRE_HIT_RADIUS = 5;
+
+/** Closest breadboard hole whose centre is within radius, or null. */
+export function nearestHoleWithin(holes, x, y, radius) {
+  let best = null;
+  let bestD = radius;
+  const list = holes?.values ? holes.values() : holes;
+  for (const hole of list) {
+    const d = Math.hypot(hole.x - x, hole.y - y);
+    if (d <= bestD) {
+      best = hole;
+      bestD = d;
+    }
+  }
+  return best;
+}
+
+/** Minimum distance from a point to a quadratic curve, sampled along its length. */
+export function minDistanceToQuadratic(h1, h2, cpX, cpY, x, y) {
+  let best = Infinity;
+  for (let i = 0; i <= 24; i++) {
+    const t = i / 24;
+    const u = 1 - t;
+    const bx = u * u * h1.x + 2 * u * t * cpX + t * t * h2.x;
+    const by = u * u * h1.y + 2 * u * t * cpY + t * t * h2.y;
+    const d = Math.hypot(x - bx, y - by);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+/**
+ * Select-mode hit. A hole wins inside its 8 px circle.
+ * Otherwise the nearest wire within the 10 px-wide stroke wins.
+ * `wires` is back-to-front; the last entry is painted on top and wins ties.
+ */
+export function pointerTarget(x, y, holes, wires) {
+  const hole = nearestHoleWithin(holes, x, y, HOLE_HIT_RADIUS);
+  if (hole) return { type: 'hole', id: hole.id, hole };
+  let best = null;
+  let bestD = WIRE_HIT_RADIUS;
+  for (let i = wires.length - 1; i >= 0; i--) {
+    const wire = wires[i];
+    const d = minDistanceToQuadratic(wire.h1, wire.h2, wire.cpX, wire.cpY, x, y);
+    if (d <= bestD) {
+      best = wire;
+      bestD = d;
+    }
+  }
+  if (best) return { type: 'wire', id: best.id, dist: bestD };
+  return null;
+}
+
 export class BreadboardCanvas {
   constructor(canvasElement, breadboard, stateManager) {
     this.canvas = canvasElement;
@@ -24,7 +78,8 @@ export class BreadboardCanvas {
     this.activeStripHoles = [];
     this.wireStartHole = null;
     this.mouseCanvasPos = { x: 0, y: 0 };
-    this.selectedItem = null; // { type: 'component' | 'wire', id }
+    this.selectedItem = null; // { type: 'component' | 'wire' | 'hole', id }
+    this.tool = 'select'; // 'select' | 'wire'
     this.draggingComponent = null;
     this.dragOffset = { x: 0, y: 0 };
 
@@ -161,39 +216,22 @@ export class BreadboardCanvas {
       return;
     }
 
-    // Part 2: Hover hit test — holes win within 8px; then wires
-    const nearestHole = this.bb.findNearestHole(world.x, world.y, 8);
-    let newHoveredWire = null;
-
-    if (nearestHole) {
-      // Inside hole radius — only hole gets hover
-      if (nearestHole !== this.hoveredHole) {
-        this.hoveredHole = nearestHole;
-        this.activeStripHoles = this.bb.getHolesInStrip(nearestHole.id);
-        this.hoveredWireId = null;
-        this.canvas.style.cursor = 'crosshair';
-        this.render();
-      }
-    } else {
-      // Outside any hole — check wires (5px hit path)
-      newHoveredWire = this.findWireAt(world.x, world.y, 5);
-
-      const prevHole = this.hoveredHole;
-      const prevWire = this.hoveredWireId;
-      this.hoveredHole = this.bb.findNearestHole(world.x, world.y, 14); // softer hover
-      this.hoveredWireId = newHoveredWire ? newHoveredWire.id : null;
-
-      if (this.hoveredHole !== prevHole || this.hoveredWireId !== prevWire) {
-        this.activeStripHoles = this.hoveredHole
-          ? this.bb.getHolesInStrip(this.hoveredHole.id)
-          : [];
-        this.canvas.style.cursor = this.hoveredHole
+    // Hover: one target. Hole inside 8 px, otherwise the wire stroke.
+    const hit = this._pointerHit(world.x, world.y);
+    const nextHole = hit?.type === 'hole' ? hit.hole : null;
+    const nextWire = hit?.type === 'wire' ? hit.id : null;
+    if (nextHole !== this.hoveredHole || nextWire !== this.hoveredWireId) {
+      this.hoveredHole = nextHole;
+      this.hoveredWireId = nextWire;
+      this.activeStripHoles = nextHole ? this.bb.getHolesInStrip(nextHole.id) : [];
+      this.canvas.style.cursor = this.tool === 'wire'
+        ? 'crosshair'
+        : nextHole
           ? 'crosshair'
-          : this.hoveredWireId
-          ? 'pointer'
-          : 'default';
-        this.render();
-      }
+          : nextWire
+            ? 'pointer'
+            : 'default';
+      this.render();
     }
   }
 
@@ -221,7 +259,26 @@ export class BreadboardCanvas {
       return;
     }
 
-    // 2. Part 2: Check if clicked a wire end handle (take priority over everything)
+    // Wire tool: holes only. Select tool: hole inside 8 px, else wire, else part body.
+    if (this.tool === 'wire') {
+      const holeForWire = this.bb.findNearestHole(world.x, world.y, 14);
+      if (holeForWire) {
+        if (!this.wireStartHole) {
+          this.wireStartHole = holeForWire;
+        } else if (this.wireStartHole.id !== holeForWire.id) {
+          this.state.addWire(this.wireStartHole.id, holeForWire.id);
+          this.wireStartHole = null;
+        }
+        this.render();
+      }
+      return;
+    }
+
+    if (e.altKey) {
+      this._altCycleAt(world.x, world.y);
+      return;
+    }
+
     const endHandle = this.findWireEndHandleAt(world.x, world.y);
     if (endHandle) {
       this.draggingWireEnd = endHandle;
@@ -232,8 +289,28 @@ export class BreadboardCanvas {
       return;
     }
 
-    // 3. Check if clicked on a component to select/drag
-    const clickedComp = this.findComponentAt(world.x, world.y);
+    const hit = this._pointerHit(world.x, world.y);
+    if (hit?.type === 'hole') {
+      this.selectedItem = { type: 'hole', id: hit.hole.id };
+      this.hoveredHole = hit.hole;
+      this.hoveredWireId = null;
+      this.activeStripHoles = this.bb.getHolesInStrip(hit.hole.id);
+      this.wireStartHole = null;
+      this.state.onSelectionChange(this.selectedItem);
+      this.render();
+      return;
+    }
+
+    if (hit?.type === 'wire') {
+      this.selectedItem = { type: 'wire', id: hit.id };
+      this.hoveredHole = null;
+      this.activeStripHoles = [];
+      this.state.onSelectionChange(this.selectedItem);
+      this.render();
+      return;
+    }
+
+    const clickedComp = this.findComponentBodyAt(world.x, world.y);
     if (clickedComp) {
       this.selectedItem = { type: 'component', id: clickedComp.id };
       this.draggingComponent = clickedComp;
@@ -250,38 +327,6 @@ export class BreadboardCanvas {
       return;
     }
 
-    // 4. Hole click for wire drawing — HOLES WIN over wires within 8px
-    const holeForWire = this.bb.findNearestHole(world.x, world.y, 14);
-    if (holeForWire) {
-      if (!this.wireStartHole) {
-        // Check if Alt+click to cycle Alt-click target
-        if (e.altKey) {
-          this._altCycleAt(world.x, world.y);
-          return;
-        }
-        this.wireStartHole = holeForWire;
-      } else if (this.wireStartHole.id !== holeForWire.id) {
-        this.state.addWire(this.wireStartHole.id, holeForWire.id);
-        this.wireStartHole = null;
-      }
-      this.render();
-      return;
-    }
-
-    // 5. Wire click for selection (only outside hole radius)
-    const clickedWire = this.findWireAt(world.x, world.y, 10);
-    if (clickedWire) {
-      if (e.altKey) {
-        this._altCycleAt(world.x, world.y);
-        return;
-      }
-      this.selectedItem = { type: 'wire', id: clickedWire.id };
-      this.state.onSelectionChange(this.selectedItem);
-      this.render();
-      return;
-    }
-
-    // 6. Clicked on empty space: deselect
     this.selectedItem = null;
     this.wireStartHole = null;
     this.state.onSelectionChange(null);
@@ -381,24 +426,73 @@ export class BreadboardCanvas {
     if (el) el.textContent = `${Math.round(this.scale * 100)}%`;
   }
 
+  setTool(tool) {
+    this.tool = tool === 'wire' ? 'wire' : 'select';
+    if (this.tool !== 'wire') this.wireStartHole = null;
+    document.getElementById('btn-tool-select')?.classList.toggle('active', this.tool === 'select');
+    document.getElementById('btn-tool-wire')?.classList.toggle('active', this.tool === 'wire');
+    this.canvas.style.cursor = this.tool === 'wire' ? 'crosshair' : 'default';
+    this.render();
+  }
+
+  _wireSamples() {
+    const samples = [];
+    for (const wire of this.state.wires) {
+      const h1 = this.getEndpointCoord(wire.fromHoleId);
+      const h2 = this.getEndpointCoord(wire.toHoleId);
+      if (!h1 || !h2) continue;
+      const { cpX, cpY } = this._computeArcCp(h1, h2, wire);
+      samples.push({ id: wire.id, h1, h2, cpX, cpY });
+    }
+    return samples;
+  }
+
+  _pointerHit(x, y) {
+    return pointerTarget(x, y, this.bb.holes, this._wireSamples());
+  }
+
+  _stackedTargets(x, y) {
+    const targets = [];
+    const hole = nearestHoleWithin(this.bb.holes, x, y, HOLE_HIT_RADIUS);
+    if (hole) targets.push({ type: 'hole', id: hole.id, hole });
+    for (const sample of this._wireSamples().slice().reverse()) {
+      const d = minDistanceToQuadratic(sample.h1, sample.h2, sample.cpX, sample.cpY, x, y);
+      if (d <= WIRE_HIT_RADIUS) targets.push({ type: 'wire', id: sample.id });
+    }
+    for (let i = this.state.components.length - 1; i >= 0; i--) {
+      const comp = this.state.components[i];
+      const onLead = comp.pins.some((pin) => {
+        const h = pin.holeId && this.bb.holes.get(pin.holeId);
+        return h && Math.hypot(h.x - x, h.y - y) <= HOLE_HIT_RADIUS;
+      });
+      if (onLead) targets.push({ type: 'component', id: comp.id });
+    }
+    const body = this.findComponentBodyAt(x, y);
+    if (body && !targets.some((t) => t.type === 'component' && t.id === body.id)) {
+      targets.push({ type: 'component', id: body.id });
+    }
+    return targets;
+  }
+
   // ─── Alt+Click Cycle ──────────────────────────────────────────────────────
   _altCycleAt(x, y) {
-    // Collect everything under cursor
-    const targets = [];
-    const hole = this.bb.findNearestHole(x, y, 14);
-    if (hole) targets.push({ type: 'hole', id: hole.id });
-    const wire = this.findWireAt(x, y, 12);
-    if (wire) targets.push({ type: 'wire', id: wire.id });
-
+    const targets = this._stackedTargets(x, y);
     if (targets.length === 0) return;
-    // Cycle selection
-    const curIdx = targets.findIndex((t) => t.id === this.selectedItem?.id);
-    const nextIdx = (curIdx + 1) % targets.length;
-    const next = targets[nextIdx];
-    if (next.type === 'wire') {
-      this.selectedItem = { type: 'wire', id: next.id };
-      this.state.onSelectionChange(this.selectedItem);
+    const curIdx = targets.findIndex(
+      (t) => t.type === this.selectedItem?.type && t.id === this.selectedItem?.id
+    );
+    const next = targets[(curIdx + 1) % targets.length];
+    this.selectedItem = { type: next.type, id: next.id };
+    if (next.type === 'hole') {
+      this.hoveredHole = next.hole;
+      this.hoveredWireId = null;
+      this.activeStripHoles = this.bb.getHolesInStrip(next.id);
+    } else if (next.type === 'wire') {
+      this.hoveredHole = null;
+      this.hoveredWireId = next.id;
+      this.activeStripHoles = [];
     }
+    this.state.onSelectionChange(this.selectedItem);
     this.render();
   }
 
@@ -1084,13 +1178,18 @@ export class BreadboardCanvas {
       ctx.quadraticCurveTo(cpX, cpY, h2.x, h2.y);
       ctx.stroke();
     } else if (isHovered) {
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-      ctx.lineWidth = 8;
+      ctx.strokeStyle = '#FACC15';
+      ctx.lineWidth = 7;
       ctx.lineCap = 'round';
       ctx.beginPath();
       ctx.moveTo(h1.x, h1.y);
       ctx.quadraticCurveTo(cpX, cpY, h2.x, h2.y);
       ctx.stroke();
+      ctx.fillStyle = '#FACC15';
+      ctx.beginPath();
+      ctx.arc(h1.x, h1.y, 6, 0, Math.PI * 2);
+      ctx.arc(h2.x, h2.y, 6, 0, Math.PI * 2);
+      ctx.fill();
     }
 
     // Outer insulation — pointer-events: none equivalent: we use invisible hit areas separately
@@ -1363,54 +1462,46 @@ export class BreadboardCanvas {
 
   // ─── Hit Testing ──────────────────────────────────────────────────────────
 
-  findComponentAt(x, y) {
+  findComponentBodyAt(x, y) {
+    if (nearestHoleWithin(this.bb.holes, x, y, HOLE_HIT_RADIUS)) return null;
     for (let i = this.state.components.length - 1; i >= 0; i--) {
       const comp = this.state.components[i];
+      const pts = [];
       for (const pin of comp.pins) {
-        if (pin.holeId && this.bb.holes.has(pin.holeId)) {
-          const h = this.bb.holes.get(pin.holeId);
-          if (Math.hypot(x - h.x, y - h.y) < 18) {
-            return comp;
-          }
+        const h = pin.holeId && this.bb.holes.get(pin.holeId);
+        if (h) pts.push(h);
+      }
+      if (pts.length < 2) continue;
+      const minX = Math.min(...pts.map((p) => p.x));
+      const maxX = Math.max(...pts.map((p) => p.x));
+      const minY = Math.min(...pts.map((p) => p.y));
+      const maxY = Math.max(...pts.map((p) => p.y));
+      const tall = maxY - minY > 16;
+      if (tall) {
+        if (x > minX && x < maxX && y > minY + HOLE_HIT_RADIUS && y < maxY - HOLE_HIT_RADIUS) {
+          return comp;
         }
+      } else if (this._nearSegment(pts[0], pts[pts.length - 1], x, y, 10)) {
+        return comp;
       }
     }
     return null;
   }
 
-  /**
-   * Part 2: Wire hit testing. The hit path is 10px wide but MUST NOT win
-   * within 8px of a hole centre.
-   */
-  findWireAt(x, y, hitRadius = 10) {
-    for (let i = this.state.wires.length - 1; i >= 0; i--) {
-      const wire = this.state.wires[i];
-      const h1 = this.getEndpointCoord(wire.fromHoleId);
-      const h2 = this.getEndpointCoord(wire.toHoleId);
-      if (!h1 || !h2) continue;
-
-      const { cpX, cpY } = this._computeArcCp(h1, h2, wire);
-
-      // Sample points along bezier curve
-      for (let t = 0.05; t <= 0.95; t += 0.03) {
-        const bx = (1 - t) * (1 - t) * h1.x + 2 * (1 - t) * t * cpX + t * t * h2.x;
-        const by = (1 - t) * (1 - t) * h1.y + 2 * (1 - t) * t * cpY + t * t * h2.y;
-
-        const dist = Math.hypot(x - bx, y - by);
-        if (dist < hitRadius) {
-          // Part 2: check that we're not within 8px of any hole
-          const nearHole = this.bb.findNearestHole(bx, by, 8);
-          if (nearHole) continue; // hole wins here
-          return wire;
-        }
-      }
-    }
-    return null;
+  _nearSegment(a, b, x, y, radius) {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy || 1;
+    let t = ((x - a.x) * dx + (y - a.y) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    const px = a.x + t * dx;
+    const py = a.y + t * dy;
+    if (Math.hypot(x - px, y - py) > radius) return false;
+    if (Math.hypot(x - a.x, y - a.y) <= HOLE_HIT_RADIUS) return false;
+    if (Math.hypot(x - b.x, y - b.y) <= HOLE_HIT_RADIUS) return false;
+    return true;
   }
 
-  /**
-   * Part 2: Find wire end handles (always above holes, grabbable)
-   */
   findWireEndHandleAt(x, y) {
     const handleRadius = 8;
     for (let i = this.state.wires.length - 1; i >= 0; i--) {

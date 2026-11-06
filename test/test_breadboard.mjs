@@ -14,6 +14,7 @@ import {
 import { CircuitGraph } from '../src/core/CircuitGraph.js';
 import { createWire } from '../src/core/WireModel.js';
 import { StateManager } from '../src/ui/StateManager.js';
+import { pointerTarget } from '../src/ui/BreadboardCanvas.js';
 
 test('BreadboardModel generates full 830-point topology', () => {
   const bb = new BreadboardModel();
@@ -164,5 +165,31 @@ test('A 555 dropped anywhere in a column straddles the gap, one pin per strip', 
     ic.pins.slice(4).map((p) => p.holeId),
     ['23-F', '22-F', '21-F', '20-F']
   );
+});
+
+test('A hole wins inside 8 px and the wire wins a few pixels off that hole', () => {
+  const holes = [
+    { id: '10-C', x: 100, y: 100 },
+    { id: '14-C', x: 180, y: 100 },
+    { id: '18-C', x: 260, y: 100 },
+  ];
+  const wires = [{
+    id: 'w1',
+    h1: holes[0],
+    h2: holes[2],
+    cpX: 180,
+    cpY: 20,
+  }];
+
+  assert.strictEqual(pointerTarget(100, 100, holes, wires).type, 'hole');
+  assert.strictEqual(pointerTarget(106, 100, holes, wires).id, '10-C');
+  assert.strictEqual(pointerTarget(180, 94, holes, wires).id, '14-C');
+
+  const onArc = pointerTarget(180, 60, holes, wires);
+  assert.strictEqual(onArc.type, 'wire');
+  assert.strictEqual(onArc.id, 'w1');
+
+  const besideArc = pointerTarget(184, 60, holes, wires);
+  assert.strictEqual(besideArc.type, 'wire');
 });
 

@@ -53,6 +53,8 @@ export class Toolbar {
           `
           ).join('')}
         </div>
+        <button id="btn-tool-select" class="tool-btn text-btn active" title="Select parts, holes and wires">Select</button>
+        <button id="btn-tool-wire" class="tool-btn text-btn" title="Draw a wire between holes">Wire</button>
       </div>
 
       <div class="toolbar-center">
@@ -188,6 +190,9 @@ export class Toolbar {
         this.state.activeWireColor = chip.dataset.hex;
       });
     });
+
+    document.getElementById('btn-tool-select')?.addEventListener('click', () => this.canvas.setTool('select'));
+    document.getElementById('btn-tool-wire')?.addEventListener('click', () => this.canvas.setTool('wire'));
 
     // History
     document.getElementById('btn-undo')?.addEventListener('click', () => this.state.undo());
