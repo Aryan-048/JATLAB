@@ -1084,6 +1084,20 @@ kbd {
   box-sizing: border-box;
 }
 
+.scope-error-banner {
+  display: none;
+  background: #dc2626;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  padding: 6px 10px;
+}
+
+.scope-error-banner.visible {
+  display: block;
+}
+
 .scope-screen-wrapper {
   flex: 1;
   background-color: #040810;

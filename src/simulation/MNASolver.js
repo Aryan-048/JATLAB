@@ -18,12 +18,22 @@ export class MNASolver {
    * If `error` is set, all node arrays contain zeros (flatline).
    */
   solveTransient(components, tStop = 0.005, dt = 1e-6) {
+    // An enabled supply whose posts touch nothing else is not part of the circuit.
+    components = this._dropUnconnectedSources(components || []);
+
     // ── Pre-flight validation ────────────────────────────────────────────
     const preflightError = this._preflightCheck(components);
     if (preflightError) {
       const numSteps = Math.min(Math.floor(tStop / dt), 10000);
       const time = Array.from({ length: numSteps }, (_, i) => i * dt);
-      const nodeVoltages = new Map([['0', new Array(numSteps).fill(0)]]);
+      const names = new Set(['0']);
+      for (const comp of components) {
+        for (const node of comp.nodes || []) {
+          if (node) names.add(node);
+        }
+      }
+      const nodeVoltages = new Map();
+      for (const name of names) nodeVoltages.set(name, new Array(numSteps).fill(0));
       return { time, nodeVoltages, sampleRate: 1 / dt, error: preflightError };
     }
 
@@ -295,6 +305,10 @@ export class MNASolver {
         }
       }
 
+      if (!simError && !converged) {
+        simError = `Newton-Raphson did not converge at t=${(t * 1000).toFixed(3)} ms.`;
+      }
+
       if (simError) break;
 
       // Store node voltages for this timestep
@@ -329,8 +343,20 @@ export class MNASolver {
       vPrev = xSol;
     }
 
-    // If we got a simulation error, zero out all node voltage arrays (flatline)
+    for (const arr of nodeVoltageArrays.values()) {
+      for (let i = 0; i < arr.length; i++) {
+        if (!Number.isFinite(arr[i])) {
+          simError = simError || 'Solver returned a non-finite voltage.';
+          break;
+        }
+      }
+    }
+
+    // A failed solve is a flat line. Never leave Infinity or NaN in the buffers.
     if (simError) {
+      for (let i = 0; i < numSteps; i++) {
+        if (timeArray[i] == null) timeArray[i] = i * dt;
+      }
       for (const arr of nodeVoltageArrays.values()) {
         arr.fill(0);
       }
@@ -364,37 +390,122 @@ export class MNASolver {
       return 'No voltage source connected. Connect a Function Generator or DC Power Supply.';
     }
 
-    // Check 3: Ground reference must exist in nodeMap context
-    // We just build the nodeMap and verify '0' exists
     this.buildNodeMap(components);
-    if (this.numNodes === 0) {
+    if (!this.referenceNet) {
+      return 'No ground connected';
+    }
+    if (this.numNodes === 0 && components.every((c) => this._isVoltageSource(c))) {
       return 'Circuit has no nodes. All components appear disconnected.';
     }
 
-    // Check 4: Detect parallel voltage sources (zero-impedance loop)
-    const srcNodes = components
-      .filter(
-        (c) =>
-          c.type === 'vsource' ||
-          c.type === 'function_generator' ||
-          c.type === 'dc_supply'
-      )
-      .map((c) => ({ id: c.id, n1: c.nodes[0], n2: c.nodes[1] }));
+    const loopError = this._voltageSourceLoopError(components);
+    if (loopError) return loopError;
 
-    for (let i = 0; i < srcNodes.length; i++) {
-      for (let j = i + 1; j < srcNodes.length; j++) {
-        const a = srcNodes[i];
-        const b = srcNodes[j];
-        const sameNodes =
-          (a.n1 === b.n1 && a.n2 === b.n2) ||
-          (a.n1 === b.n2 && a.n2 === b.n1);
-        if (sameNodes) {
-          return `Two voltage sources (${a.id} and ${b.id}) are connected in parallel between the same nodes. This causes a short circuit.`;
+    const floatingError = this._floatingNodeError(components);
+    if (floatingError) return floatingError;
+
+    return null;
+  }
+
+  _voltageSourceLoopError(components) {
+    const sources = components.filter((c) => this._isVoltageSource(c) && c.nodes && c.nodes.length >= 2);
+    const edges = [];
+    for (const src of sources) {
+      const a = this.getNodeIndex(src.nodes[0]);
+      const b = this.getNodeIndex(src.nodes[1]);
+      if (a === b) return `${this._sourceLabel(src)} is shorted`;
+      edges.push({ a, b, src });
+    }
+
+    const seenPair = new Map();
+    for (const edge of edges) {
+      const key = edge.a < edge.b ? `${edge.a}|${edge.b}` : `${edge.b}|${edge.a}`;
+      if (seenPair.has(key)) {
+        return this._shortedMessage(seenPair.get(key), edge.src);
+      }
+      seenPair.set(key, edge.src);
+    }
+
+    const adj = new Map();
+    edges.forEach((edge, index) => {
+      if (!adj.has(edge.a)) adj.set(edge.a, []);
+      if (!adj.has(edge.b)) adj.set(edge.b, []);
+      adj.get(edge.a).push({ to: edge.b, edge: index });
+      adj.get(edge.b).push({ to: edge.a, edge: index });
+    });
+
+    const visited = new Set();
+    for (const start of adj.keys()) {
+      if (visited.has(start)) continue;
+      const stack = [{ node: start, prevEdge: -1 }];
+      const parent = new Map([[start, -1]]);
+      while (stack.length) {
+        const { node, prevEdge } = stack.pop();
+        if (visited.has(node)) continue;
+        visited.add(node);
+        for (const next of adj.get(node) || []) {
+          if (next.edge === prevEdge) continue;
+          if (parent.has(next.to)) {
+            const involved = new Set([edges[next.edge].src]);
+            let cursor = node;
+            while (cursor !== next.to && cursor != null) {
+              const edgeIndex = parent.get(cursor);
+              if (edgeIndex == null || edgeIndex < 0) break;
+              involved.add(edges[edgeIndex].src);
+              cursor = edges[edgeIndex].a === cursor ? edges[edgeIndex].b : edges[edgeIndex].a;
+            }
+            const labels = [...involved].map((src) => this._sourceLabel(src));
+            if (labels.length === 2) return `${labels[0]} and ${labels[1]} are shorted`;
+            return `Voltage sources ${labels.join(', ')} are shorted`;
+          }
+          parent.set(next.to, next.edge);
+          stack.push({ node: next.to, prevEdge: next.edge });
+        }
+      }
+    }
+    return null;
+  }
+
+  _floatingNodeError(components) {
+    const adj = new Map();
+    const link = (a, b) => {
+      if (a === b) return;
+      if (!adj.has(a)) adj.set(a, []);
+      if (!adj.has(b)) adj.set(b, []);
+      adj.get(a).push(b);
+      adj.get(b).push(a);
+    };
+
+    for (const comp of components) {
+      const idxs = (comp.nodes || []).map((node) => this.getNodeIndex(node));
+      for (let i = 0; i < idxs.length; i++) {
+        for (let j = i + 1; j < idxs.length; j++) {
+          link(idxs[i], idxs[j]);
         }
       }
     }
 
-    return null; // All good
+    const seen = new Set([0]);
+    const queue = [0];
+    while (queue.length) {
+      const node = queue.pop();
+      for (const next of adj.get(node) || []) {
+        if (seen.has(next)) continue;
+        seen.add(next);
+        queue.push(next);
+      }
+    }
+
+    const floating = [];
+    const reported = new Set();
+    for (const [name, idx] of this.nodeMap.entries()) {
+      if (idx === 0 || seen.has(idx) || reported.has(idx)) continue;
+      reported.add(idx);
+      floating.push(name);
+    }
+    if (floating.length === 0) return null;
+    if (floating.length === 1) return `Node ${floating[0]} is floating`;
+    return `Nodes ${floating.join(', ')} are floating`;
   }
 
   getVoltageSourceValue(comp, t) {
@@ -438,19 +549,97 @@ export class MNASolver {
   buildNodeMap(components) {
     this.nodeMap.clear();
     this.nodeMap.set('0', 0);
-    this.nodeMap.set('GND', 0);
-    this.nodeMap.set('RAIL_TOP_NEG', 0);
-    this.nodeMap.set('RAIL_BTM_NEG', 0);
+
+    const present = new Set();
+    for (const comp of components) {
+      for (const node of comp.nodes || []) {
+        if (node) present.add(node);
+      }
+    }
+
+    const railNames = ['GND', 'GND_TOP', 'GND_BTM', 'RAIL_TOP_NEG', 'RAIL_BTM_NEG'];
+    const railsUsed = railNames.filter((name) => present.has(name));
+    const symbolGrounds = [];
+    for (const comp of components) {
+      if (comp.type === 'gnd_terminal' && comp.nodes && comp.nodes[0]) {
+        symbolGrounds.push(comp.nodes[0]);
+      }
+    }
+
+    let reference = null;
+    if (present.has('0')) {
+      reference = '0';
+    } else if (symbolGrounds.length > 0) {
+      reference = symbolGrounds[0];
+    } else if (railsUsed.length === 1) {
+      reference = railsUsed[0];
+    } else if (railsUsed.length > 1) {
+      const sources = components.filter((c) => this._isVoltageSource(c));
+      for (const src of sources) {
+        const neg = src.nodes && src.nodes[1];
+        if (railsUsed.includes(neg)) {
+          reference = neg;
+          break;
+        }
+      }
+      if (!reference) reference = railsUsed[0];
+    }
+
+    this.referenceNet = reference;
+    if (reference) this.nodeMap.set(reference, 0);
 
     let nextIdx = 1;
     for (const comp of components) {
-      for (const node of comp.nodes) {
-        if (!this.nodeMap.has(node)) {
-          this.nodeMap.set(node, nextIdx++);
-        }
+      for (const node of comp.nodes || []) {
+        if (!node || this.nodeMap.has(node)) continue;
+        this.nodeMap.set(node, nextIdx++);
       }
     }
     this.numNodes = nextIdx - 1;
+  }
+
+  _dropUnconnectedSources(components) {
+    const usedByParts = new Set();
+    const groundNames = new Set(['0', 'GND', 'GND_TOP', 'GND_BTM', 'RAIL_TOP_NEG', 'RAIL_BTM_NEG']);
+    for (const comp of components) {
+      if (this._isVoltageSource(comp)) continue;
+      for (const node of comp.nodes || []) usedByParts.add(node);
+    }
+    return components.filter((comp) => {
+      if (!this._isVoltageSource(comp)) return true;
+      return (comp.nodes || []).some((node) => usedByParts.has(node) || groundNames.has(node));
+    });
+  }
+
+  _isVoltageSource(comp) {
+    return (
+      comp.type === 'vsource' ||
+      comp.type === 'function_generator' ||
+      comp.type === 'dc_supply' ||
+      comp.type === 'vcc_terminal'
+    );
+  }
+
+  _sourceLabel(comp) {
+    if (comp.type === 'dc_supply' || comp.type === 'vcc_terminal') return 'the DC supply';
+    if (comp.type === 'function_generator') {
+      const match = String(comp.id || '').match(/(\d+)/);
+      return match ? `Generator ${match[1]}` : 'the generator';
+    }
+    return comp.id || 'a voltage source';
+  }
+
+  _shortedMessage(a, b) {
+    const labels = [this._sourceLabel(a), this._sourceLabel(b)];
+    labels.sort((x, y) => (x.startsWith('Generator') ? 0 : 1) - (y.startsWith('Generator') ? 0 : 1));
+    return `${labels[0]} and ${labels[1]} are shorted`;
+  }
+
+  _nodeName(index) {
+    for (const [name, idx] of this.nodeMap.entries()) {
+      if (idx === index && name !== '0') return name;
+    }
+    return index === 0 ? '0' : String(index);
   }
 
   getNodeIndex(netName) {
@@ -492,9 +681,11 @@ export class MNASolver {
         [x[p], x[maxRow]] = [x[maxRow], x[p]];
       }
 
-      // Part 3: Detect near-singular diagonal (floating node)
       if (Math.abs(M[p][p]) < 1e-20) {
-        throw new Error(`Singular matrix at row ${p}. Node ${p + 1} may be floating or disconnected.`);
+        if (p < this.numNodes) {
+          throw new Error(`Node ${this._nodeName(p + 1)} is floating`);
+        }
+        throw new Error('Voltage sources are shorted');
       }
 
       for (let r = p + 1; r < n; r++) {

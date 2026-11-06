@@ -99,11 +99,16 @@ export class CircuitGraph {
     const topPosHole = 'TP-1';
     const btmPosHole = 'BP-1';
 
+    // The two blue rails are ground only when a wire actually joins them.
+    // Naming both '0' would short them inside the solver.
     const gndRoot = this.dsu.find(topGndHole);
-    this.netNames.set(gndRoot, '0');
-
     const btmGndRoot = this.dsu.find(btmGndHole);
-    this.netNames.set(btmGndRoot, '0');
+    if (gndRoot === btmGndRoot) {
+      this.netNames.set(gndRoot, '0');
+    } else {
+      this.netNames.set(gndRoot, 'GND_TOP');
+      this.netNames.set(btmGndRoot, 'GND_BTM');
+    }
 
     const posRoot = this.dsu.find(topPosHole);
     if (posRoot !== gndRoot) {

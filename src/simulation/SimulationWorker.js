@@ -19,11 +19,12 @@ self.onmessage = function (e) {
     }
 
     self.postMessage({
-      success: true,
+      success: !result.error,
       messageId,
       time: result.time,
       sampleRate: result.sampleRate,
       nodeVoltages: nodeData,
+      error: result.error || null,
     });
   } catch (err) {
     self.postMessage({

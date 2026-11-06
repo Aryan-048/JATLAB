@@ -130,5 +130,109 @@ test('Diode Rectifier exhibits realistic Shockley forward drop ~0.7 V', () => {
   console.log(`Rectifier V_peak: ${maxV.toFixed(3)} V | V_min: ${minV.toFixed(3)} V`);
   assert.ok(maxV > 4.1 && maxV < 4.5, `Rectified peak should be ~4.3 V, got ${maxV}`);
   assert.ok(minV >= -0.05, `Rectified negative cycle should be clipped to ~0 V, got ${minV}`);
+  assert.strictEqual(result.error, null);
+});
+
+function assertFlatFinite(result) {
+  assert.ok(result.error, 'expected a solver error');
+  for (const arr of result.nodeVoltages.values()) {
+    for (const v of arr) {
+      assert.strictEqual(v, 0);
+      assert.ok(Number.isFinite(v));
+    }
+  }
+  for (const t of result.time) assert.ok(Number.isFinite(t));
+}
+
+test('A circuit with no ground reports the reason and stays flat', () => {
+  const solver = new MNASolver();
+  const result = solver.solveTransient([
+    {
+      id: 'FG1',
+      type: 'function_generator',
+      nodes: ['A', 'B'],
+      value: 2,
+      properties: { waveform: 'sine', frequency: 1000, amplitude: 2, enabled: true },
+    },
+    { id: 'R1', type: 'resistor', nodes: ['A', 'B'], value: 1000 },
+  ], 0.001, 1e-5);
+  assert.strictEqual(result.error, 'No ground connected');
+  assertFlatFinite(result);
+});
+
+test('Two sources on the same nodes are reported as shorted', () => {
+  const solver = new MNASolver();
+  const result = solver.solveTransient([
+    {
+      id: 'FG1',
+      type: 'function_generator',
+      nodes: ['A', '0'],
+      value: 2,
+      properties: { waveform: 'sine', frequency: 1000, amplitude: 2, enabled: true },
+    },
+    {
+      id: 'PS1',
+      type: 'dc_supply',
+      nodes: ['A', '0'],
+      value: 5,
+      properties: { voltage: 5, enabled: true },
+    },
+  ], 0.001, 1e-5);
+  assert.strictEqual(result.error, 'Generator 1 and the DC supply are shorted');
+  assertFlatFinite(result);
+});
+
+test('A node with no path to ground is floating and the result is finite', () => {
+  const solver = new MNASolver();
+  const result = solver.solveTransient([
+    {
+      id: 'FG1',
+      type: 'function_generator',
+      nodes: ['IN', '0'],
+      value: 2,
+      properties: { waveform: 'sine', frequency: 1000, amplitude: 2, enabled: true },
+    },
+    { id: 'Rfloat', type: 'resistor', nodes: ['X', 'Y'], value: 1000 },
+  ], 0.001, 1e-5);
+  assert.strictEqual(result.error, 'Nodes X, Y are floating');
+  assertFlatFinite(result);
+});
+
+test('The bottom ground rail can be the reference without shorting the top rail', () => {
+  const solver = new MNASolver();
+  const alone = solver.solveTransient([
+    {
+      id: 'FG1',
+      type: 'function_generator',
+      nodes: ['IN', 'GND_BTM'],
+      value: 2,
+      properties: { waveform: 'sine', frequency: 1000, amplitude: 2, enabled: true },
+    },
+    { id: 'R1', type: 'resistor', nodes: ['IN', 'GND_BTM'], value: 1000 },
+  ], 0.001, 2e-5);
+  assert.strictEqual(alone.error, null);
+  const peak = Math.max(...alone.nodeVoltages.get('IN'));
+  assert.ok(Math.abs(peak - 2) < 0.05, `bottom-rail source should still be 2 V, got ${peak}`);
+
+  // A supply that only touches the other rail must not be silently tied to this ground.
+  const split = solver.solveTransient([
+    {
+      id: 'FG1',
+      type: 'function_generator',
+      nodes: ['IN', 'GND_BTM'],
+      value: 2,
+      properties: { waveform: 'sine', frequency: 1000, amplitude: 2, enabled: true },
+    },
+    { id: 'R1', type: 'resistor', nodes: ['IN', 'GND_BTM'], value: 1000 },
+    {
+      id: 'PS1',
+      type: 'dc_supply',
+      nodes: ['VCC', 'GND_TOP'],
+      value: 5,
+      properties: { voltage: 5, enabled: true },
+    },
+  ], 0.001, 2e-5);
+  assert.match(split.error, /floating/);
+  assertFlatFinite(split);
 });
 

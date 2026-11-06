@@ -46,6 +46,7 @@ export class OscilloscopeView {
         <div class="scope-body">
           <!-- CRT / LCD Screen Container -->
           <div class="scope-screen-wrapper">
+            <div id="scope-error-banner" class="scope-error-banner" role="status"></div>
             <canvas id="scope-screen-canvas" width="460" height="320"></canvas>
             
             <!-- Live Auto-Measurements Bar -->
@@ -455,11 +456,13 @@ export class OscilloscopeView {
 
     this.lastDrawnData = simData;
 
-    // Part 3: Show error banner if solver failed
     if (simData.error) {
-      this._drawErrorBanner(ctx, w, h, simData.error);
-      return; // flatline (screen is already drawn with no traces)
+      this._setErrorBanner(simData.error);
+      this._writeFlatMeasurements();
+      this._drawFlatLine(ctx, w, h);
+      return;
     }
+    this._setErrorBanner(null);
 
     this.renderTraces(ctx, simData, w, h, dx, dy);
   }
@@ -471,9 +474,11 @@ export class OscilloscopeView {
     // Resolve which global electrical nets the scope probes are wired to!
     const ch1Net = this.appState.circuitGraph.getNetForHole('OSC_CH1');
     const ch2Net = this.appState.circuitGraph.getNetForHole('OSC_CH2');
+    const ch1Gnd = this.appState.circuitGraph.getNetForHole('OSC_CH1_GND');
+    const ch2Gnd = this.appState.circuitGraph.getNetForHole('OSC_CH2_GND');
 
-    const v1Raw = nodeVoltages[ch1Net] || new Array(time.length).fill(0);
-    const v2Raw = nodeVoltages[ch2Net] || new Array(time.length).fill(0);
+    const v1Raw = this._probeVoltage(nodeVoltages, ch1Net, ch1Gnd, time.length);
+    const v2Raw = this._probeVoltage(nodeVoltages, ch2Net, ch2Gnd, time.length);
 
     // Apply coupling (AC removes mean DC bias, GND forces 0V)
     const v1 = this.applyCoupling(v1Raw, this.state.ch1Coupling);
@@ -599,7 +604,7 @@ export class OscilloscopeView {
       let sumSq = 0;
 
       for (let i = 0; i < arr.length; i++) {
-        const val = arr[i];
+        const val = Number.isFinite(arr[i]) ? arr[i] : 0;
         if (val > max) max = val;
         if (val < min) min = val;
         sumSq += val * val;
@@ -692,6 +697,53 @@ export class OscilloscopeView {
     ctx.fillText(`1/ΔT: ${invDt > 1000 ? (invDt / 1000).toFixed(2) + ' kHz' : invDt.toFixed(0) + ' Hz'}`, w - 170, 40);
     ctx.fillText(`ΔV: ${dv.toFixed(2)} V`, w - 170, 54);
 
+    ctx.restore();
+  }
+
+  _probeVoltage(nodeVoltages, signalNet, groundNet, length) {
+    const signal = nodeVoltages[signalNet];
+    const ground = nodeVoltages[groundNet];
+    const out = new Array(length);
+    for (let i = 0; i < length; i++) {
+      const vs = signal && Number.isFinite(signal[i]) ? signal[i] : 0;
+      const vg = ground && Number.isFinite(ground[i]) ? ground[i] : 0;
+      const v = vs - vg;
+      out[i] = Number.isFinite(v) ? v : 0;
+    }
+    return out;
+  }
+
+  _setErrorBanner(message) {
+    const el = document.getElementById('scope-error-banner');
+    if (!el) return;
+    if (message) {
+      el.textContent = message;
+      el.classList.add('visible');
+    } else {
+      el.textContent = '';
+      el.classList.remove('visible');
+    }
+  }
+
+  _writeFlatMeasurements() {
+    for (const id of ['m-ch1-vpp', 'm-ch1-vmax', 'm-ch1-vmin', 'm-ch2-vpp', 'm-ch2-vmax', 'm-ch2-vmin']) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = '0.00 V';
+    }
+    for (const id of ['m-ch1-freq', 'm-ch2-freq']) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = '0.0 Hz';
+    }
+  }
+
+  _drawFlatLine(ctx, w, h) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(239, 68, 68, 0.85)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, h / 2);
+    ctx.lineTo(w, h / 2);
+    ctx.stroke();
     ctx.restore();
   }
 
