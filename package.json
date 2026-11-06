@@ -1,0 +1,25 @@
+{
+  "name": "gatlab-comm-simulator",
+  "version": "1.0.0",
+  "description": "Interactive Communication Lab Practice Simulator with Virtual Breadboard and MNA Engine",
+  "type": "module",
+  "scripts": {
+    "start": "python run_server.py",
+    "test": "node --experimental-strip-types --test test/test_breadboard.mjs test/test_solver.mjs test/test_instruments_integration.mjs"
+  },
+  "keywords": [
+    "breadboard",
+    "circuit-simulator",
+    "communication-lab",
+    "mna",
+    "simulink",
+    "am",
+    "fm",
+    "pam",
+    "pwm",
+    "ask"
+  ],
+  "author": "Antigravity Pair Programmer",
+  "license": "MIT"
+}
+

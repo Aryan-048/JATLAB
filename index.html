@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GATLAB - Communication Lab Practice Simulator</title>
+  <link rel="stylesheet" href="./src/styles.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%232563EB'><rect width='24' height='24' rx='4'/><path d='M7 12h10M12 7v10' stroke='white' stroke-width='2'/></svg>">
+  <style>
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body>
+  <!-- Top Action Toolbar -->
+  <header id="toolbar-container" class="toolbar-container"></header>
+
+  <!-- Instruments Workbench Rack (Two Generators, DC Supply, Oscilloscope) -->
+  <section id="instruments-rack" class="instruments-rack">
+    <div id="fg1-panel-container" class="instrument-dock-item" draggable="true" data-inst-id="FG1"></div>
+    <div id="fg2-panel-container" class="instrument-dock-item" draggable="true" data-inst-id="FG2"></div>
+    <div id="ps1-panel-container" class="instrument-dock-item" draggable="true" data-inst-id="PS1"></div>
+    <div id="scope-panel-container" class="instrument-dock-item" draggable="true" data-inst-id="OSC1"></div>
+  </section>
+
+  <!-- Main Simulator Workspace -->
+  <main class="main-workspace">
+    <!-- Left: Parts Palette + Circuit Guides Sidebar -->
+    <aside id="palette-container" class="palette-container"></aside>
+
+    <!-- Center: Interactive Breadboard Canvas Viewport -->
+    <section class="canvas-viewport">
+      <canvas id="breadboard-canvas"></canvas>
+    </section>
+
+    <!-- Right: Property Inspector + Circuit Checker Panel -->
+    <aside class="right-panel">
+      <div id="inspector-container" class="inspector-container"></div>
+      <!-- Part 4: Circuit Checker -->
+      <div id="circuit-checker-container" class="circuit-checker-container"></div>
+    </aside>
+
+    <!-- Floating: Circuit Issues Diagnostics Drawer -->
+    <div id="issues-drawer-container"></div>
+  </main>
+
+  <!-- Part 5: Circuit Guides (placed in palette sidebar via JS) -->
+  <div id="circuit-guides-container" style="display:none"></div>
+
+  <!-- Application Bootstrap -->
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>
