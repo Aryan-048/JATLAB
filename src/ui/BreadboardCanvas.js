@@ -144,7 +144,8 @@ export class BreadboardCanvas {
     if (this.draggingComponent) {
       const nearest = this.bb.findNearestHole(world.x + this.dragOffset.x, world.y + this.dragOffset.y, 25);
       if (nearest) {
-        this.state.updateComponentAnchor(this.draggingComponent.id, nearest.id);
+        const snapped = this.state.resolveAnchor(this.draggingComponent, nearest.id);
+        this.state.updateComponentAnchor(this.draggingComponent.id, snapped);
       }
       this.render();
       return;
@@ -153,7 +154,9 @@ export class BreadboardCanvas {
     // Ghost component placement from palette
     if (this.state.pendingPlacement) {
       const nearest = this.bb.findNearestHole(world.x, world.y, 25);
-      this.state.pendingHole = nearest ? nearest.id : null;
+      this.state.pendingHole = nearest
+        ? this.state.resolveAnchor(this.state.pendingPlacement, nearest.id)
+        : null;
       this.render();
       return;
     }
@@ -993,8 +996,8 @@ export class BreadboardCanvas {
   }
 
   /**
-   * Compute a smart arc control point that lifts the wire above the board.
-   * The arc height is proportional to the wire length and always curves upward.
+   * Lifted quadratic arc. The bow is chosen so the curve stays off hole
+   * centres (except its two ends) and parallel wires sit on different bows.
    */
   _computeArcCp(h1, h2, wire) {
     if (wire.waypoints && wire.waypoints.length > 0) {
@@ -1002,24 +1005,54 @@ export class BreadboardCanvas {
     }
     const dx = h2.x - h1.x;
     const dy = h2.y - h1.y;
-    const dist = Math.hypot(dx, dy);
-    // Arc height: lift wire above the board — proportional to distance, min 20px, max 70px
-    const arcHeight = Math.max(20, Math.min(70, dist * 0.38));
+    const dist = Math.hypot(dx, dy) || 1;
     const midX = (h1.x + h2.x) / 2;
     const midY = (h1.y + h2.y) / 2;
+    const perpX = -dy / dist;
+    const perpY = dx / dist;
+    const alongX = dx / dist;
+    const alongY = dy / dist;
+    const index = Math.max(0, this.state.wires.indexOf(wire));
+    const lateral = ((index % 5) - 2) * 14;
+    const base = Math.max(56, Math.min(150, dist * 0.45));
 
-    // Perpendicular direction (rotate 90°): (-dy, dx) normalized
-    const len = dist || 1;
-    const perpX = -dy / len;
-    const perpY = dx / len;
+    let best = null;
+    for (const peak of [base, base + 40]) {
+      for (const sign of [1, -1]) {
+        const lift = peak * 2;
+        const cpX = midX + sign * perpX * lift + alongX * lateral;
+        const cpY = midY + sign * perpY * lift + alongY * lateral;
+        const hits = this._arcHoleHits(h1, h2, cpX, cpY);
+        const upward = cpY < midY ? 0 : 1;
+        const score = hits * 10 + upward;
+        if (!best || score < best.score) best = { cpX, cpY, score };
+      }
+    }
+    return best;
+  }
 
-    // Always lift upward (negative y = up on canvas)
-    // For mostly-horizontal wires, curve upward; for vertical wires, curve to the left
-    const liftSign = perpY < 0 || (perpY === 0 && perpX < 0) ? 1 : -1;
-    const cpX = midX + liftSign * perpX * arcHeight;
-    const cpY = midY + liftSign * perpY * arcHeight;
-
-    return { cpX, cpY };
+  _arcHoleHits(h1, h2, cpX, cpY) {
+    const minX = Math.min(h1.x, h2.x, cpX) - 4;
+    const maxX = Math.max(h1.x, h2.x, cpX) + 4;
+    const minY = Math.min(h1.y, h2.y, cpY) - 4;
+    const maxY = Math.max(h1.y, h2.y, cpY) + 4;
+    let hits = 0;
+    for (let i = 1; i <= 7; i++) {
+      const t = i / 8;
+      const u = 1 - t;
+      const x = u * u * h1.x + 2 * u * t * cpX + t * t * h2.x;
+      const y = u * u * h1.y + 2 * u * t * cpY + t * t * h2.y;
+      for (const hole of this.bb.holes.values()) {
+        if (hole.x < minX || hole.x > maxX || hole.y < minY || hole.y > maxY) continue;
+        if (Math.hypot(hole.x - h1.x, hole.y - h1.y) < 10) continue;
+        if (Math.hypot(hole.x - h2.x, hole.y - h2.y) < 10) continue;
+        if (Math.hypot(hole.x - x, hole.y - y) < 9) {
+          hits += 1;
+          break;
+        }
+      }
+    }
+    return hits;
   }
 
   drawSingleWire(ctx, wire, isSelected, isHovered, fadeWires) {
@@ -1191,19 +1224,34 @@ export class BreadboardCanvas {
     if (!comp) return;
 
     const anchorHoleId = this.state.pendingHole;
-    const anchorHole = anchorHoleId ? this.bb.holes.get(anchorHoleId) : null;
 
     ctx.save();
     ctx.globalAlpha = 0.7;
 
-    const targetX = anchorHole ? anchorHole.x : this.mouseCanvasPos.x;
-    const targetY = anchorHole ? anchorHole.y : this.mouseCanvasPos.y;
+    const ghostPins = anchorHoleId
+      ? this.state.projectPins(comp, anchorHoleId)
+      : comp.pins.map((p) => ({
+          x: this.mouseCanvasPos.x + p.relCol * this.bb.config.pitch,
+          y: this.mouseCanvasPos.y + p.relRow * this.bb.config.pitch,
+          name: p.name,
+          id: p.id,
+          holeId: null,
+        }));
 
-    const ghostPins = comp.pins.map((p) => {
-      const px = targetX + p.relCol * this.bb.config.pitch;
-      const py = targetY + p.relRow * this.bb.config.pitch;
-      return { x: px, y: py, name: p.name, id: p.id };
-    });
+    if (!ghostPins.length || ghostPins.some((p) => !p)) {
+      ctx.restore();
+      return;
+    }
+
+    for (const pin of ghostPins) {
+      if (!pin.holeId) continue;
+      const taken = this.state.occupancyMap.has(pin.holeId);
+      ctx.strokeStyle = taken ? '#EF4444' : '#38BDF8';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(pin.x, pin.y, 8, 0, Math.PI * 2);
+      ctx.stroke();
+    }
 
     switch (comp.type) {
       case 'resistor': this.renderResistor(ctx, comp, ghostPins); break;

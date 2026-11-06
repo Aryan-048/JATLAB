@@ -241,14 +241,15 @@ export class App {
     this.state.startPlacement('capacitor', { value: 0.1e-6, label: 'C1 (0.1µF)' });
     this.state.commitPendingPlacement('14-D');
 
-    // Connect wires (using skipOccupancyCheck since these are pre-programmatic wires)
-    this.state.addWire(fg.terminals.out.id, '10-C', '#EF4444', { skipOccupancyCheck: true });
-    this.state.addWire(fg.terminals.gnd.id, 'BN-10', '#1F2937', { skipOccupancyCheck: true });
-    this.state.addWire('16-D', 'BN-16', '#1F2937', { skipOccupancyCheck: true });
-    this.state.addWire(osc.terminals.ch1Pos.id, '10-C', '#FACC15', { skipOccupancyCheck: true });
-    this.state.addWire(osc.terminals.ch1Gnd.id, 'BN-12', '#1F2937', { skipOccupancyCheck: true });
-    this.state.addWire(osc.terminals.ch2Pos.id, '14-D', '#38BDF8', { skipOccupancyCheck: true });
-    this.state.addWire(osc.terminals.ch2Gnd.id, 'BN-14', '#1F2937', { skipOccupancyCheck: true });
+    // Each instrument terminal lands in its own free hole of the right strip.
+    // R1 occupies 10-C and 14-C. C1 occupies 14-D and 16-D.
+    this.state.addWire(fg.terminals.out.id, '10-A', '#EF4444');
+    this.state.addWire(fg.terminals.gnd.id, 'BN-10', '#1F2937');
+    this.state.addWire('16-A', 'BN-16', '#1F2937');
+    this.state.addWire(osc.terminals.ch1Pos.id, '10-B', '#FACC15');
+    this.state.addWire(osc.terminals.ch1Gnd.id, 'BN-12', '#1F2937');
+    this.state.addWire(osc.terminals.ch2Pos.id, '14-E', '#38BDF8');
+    this.state.addWire(osc.terminals.ch2Gnd.id, 'BN-14', '#1F2937');
 
     this.sim.triggerSim();
     this.canvas.render();

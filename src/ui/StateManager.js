@@ -165,9 +165,78 @@ export class StateManager {
     return this.occupancyMap.has(holeId);
   }
 
+  /**
+   * DIP packages always straddle the centre gap: pin 1's row is E,
+   * the opposite row is F. The clicked column is kept, shifted inward
+   * if the package would run off the right edge.
+   */
+  resolveAnchor(comp, holeId) {
+    if (!comp || !holeId) return holeId;
+    if (comp.type !== 'ic_555' && comp.type !== 'ic_8038') return holeId;
+    const hole = this.bb.holes.get(holeId);
+    if (!hole) return holeId;
+    const span = Math.max(...comp.pins.map((p) => p.relCol));
+    let col = hole.colIndex;
+    const maxCol = this.bb.config.columns - span;
+    if (col > maxCol) col = maxCol;
+    if (col < 1) col = 1;
+    return `${col}-E`;
+  }
+
+  /** Where each pin would land, without writing those holes onto the part. */
+  projectPins(comp, anchorHoleId) {
+    const anchorId = this.resolveAnchor(comp, anchorHoleId);
+    const anchor = this.bb.holes.get(anchorId);
+    if (!anchor) return [];
+    const rowOrder = ['TP', 'TN', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'BP', 'BN'];
+    const anchorRowIndex = rowOrder.indexOf(anchor.rowId);
+    return comp.pins.map((pin) => {
+      const targetCol = anchor.colIndex + pin.relCol;
+      const targetRowIndex = anchorRowIndex + pin.relRow;
+      if (
+        targetCol < 1 ||
+        targetCol > this.bb.config.columns ||
+        targetRowIndex < 0 ||
+        targetRowIndex >= rowOrder.length
+      ) {
+        return null;
+      }
+      const targetRowId = rowOrder[targetRowIndex];
+      const targetHoleId =
+        targetRowId.startsWith('T') || targetRowId.startsWith('B')
+          ? `${targetRowId}-${targetCol}`
+          : `${targetCol}-${targetRowId}`;
+      const hole = this.bb.holes.get(targetHoleId);
+      if (!hole) return null;
+      return { id: pin.id, name: pin.name, holeId: hole.id, x: hole.x, y: hole.y, stripId: hole.stripId };
+    });
+  }
+
+  /**
+   * Returns a user-facing reason the projected pins cannot be placed, or null.
+   * `ignoreComponentId` is the part being moved, whose current holes are free.
+   */
+  placementProblem(comp, anchorHoleId, ignoreComponentId = null) {
+    const projected = this.projectPins(comp, anchorHoleId);
+    if (projected.length !== comp.pins.length || projected.some((p) => !p)) {
+      return 'That part does not fit on the board there.';
+    }
+    const strips = new Set();
+    for (const pin of projected) {
+      if (strips.has(pin.stripId)) {
+        return 'Component leads would land on the same strip. Move or rotate it.';
+      }
+      strips.add(pin.stripId);
+      if (!this._isBreadboardHole(pin.holeId)) continue;
+      const occ = this.occupancyMap.get(pin.holeId);
+      if (occ && occ.id !== ignoreComponentId) return 'Hole already used';
+    }
+    return null;
+  }
+
   // ─── Wires Management ────────────────────────────────────────────────────
 
-  addWire(fromHoleId, toHoleId, color = this.activeWireColor, { skipOccupancyCheck = false } = {}) {
+  addWire(fromHoleId, toHoleId, color = this.activeWireColor) {
     if (fromHoleId === toHoleId) return null;
 
     // Avoid duplicate identical wire
@@ -181,16 +250,13 @@ export class StateManager {
       return null;
     }
 
-    if (!skipOccupancyCheck) {
-      // Check occupancy for breadboard holes only
-      if (this._isBreadboardHole(fromHoleId) && this.occupancyMap.has(fromHoleId)) {
-        this.showToast(`Hole ${fromHoleId} is already used. Use a different hole in the same strip.`, 'error');
-        return null;
-      }
-      if (this._isBreadboardHole(toHoleId) && this.occupancyMap.has(toHoleId)) {
-        this.showToast(`Hole ${toHoleId} is already used. Use a different hole in the same strip.`, 'error');
-        return null;
-      }
+    if (this._isBreadboardHole(fromHoleId) && this.occupancyMap.has(fromHoleId)) {
+      this.showToast('Hole already used', 'error');
+      return null;
+    }
+    if (this._isBreadboardHole(toHoleId) && this.occupancyMap.has(toHoleId)) {
+      this.showToast('Hole already used', 'error');
+      return null;
     }
 
     this.snapshot();
@@ -231,7 +297,7 @@ export class StateManager {
       // Check it's not the wire itself occupying it
       const occ = this.occupancyMap.get(newHoleId);
       if (!(occ.type === 'wire' && occ.id === wireId)) {
-        this.showToast(`Hole ${newHoleId} is already used.`, 'error');
+        this.showToast('Hole already used', 'error');
         return false;
       }
     }
@@ -290,30 +356,15 @@ export class StateManager {
     if (!this.pendingPlacement || !anchorHoleId) return false;
 
     const comp = this.pendingPlacement;
+    anchorHoleId = this.resolveAnchor(comp, anchorHoleId);
+    const problem = this.placementProblem(comp, anchorHoleId);
+    if (problem) {
+      this.showToast(problem, 'error');
+      return false;
+    }
+
     comp.anchorHoleId = anchorHoleId;
     this.calculatePinPlacements(comp, anchorHoleId);
-
-    // Check all pin target holes for occupancy
-    for (const pin of comp.pins) {
-      if (pin.holeId && this._isBreadboardHole(pin.holeId) && this.occupancyMap.has(pin.holeId)) {
-        this.showToast(`Hole ${pin.holeId} is already used. Try a different position.`, 'error');
-        return false;
-      }
-    }
-
-    // Also validate no two pins land on the same strip (would short the component itself)
-    if (comp.pins.length >= 2 && comp.pins[0].holeId && comp.pins[1].holeId) {
-      this.circuitGraph.rebuild(this.components, this.wires);
-      const net0 = this.circuitGraph.getNetForHole(comp.pins[0].holeId);
-      const net1 = this.circuitGraph.getNetForHole(comp.pins[1].holeId);
-      if (net0 === net1) {
-        this.showToast(
-          `Component leads would land on the same strip (${comp.pins[0].holeId} & ${comp.pins[1].holeId}). Try rotating or moving it.`,
-          'error'
-        );
-        return false;
-      }
-    }
 
     this.snapshot();
     this.components.push(comp);
@@ -336,26 +387,24 @@ export class StateManager {
     const comp = this.components.find((c) => c.id === componentId);
     if (!comp) return;
 
-    // Free old pin occupancy
-    for (const pin of comp.pins) {
-      if (pin.holeId && this._isBreadboardHole(pin.holeId)) {
-        const occ = this.occupancyMap.get(pin.holeId);
-        if (occ && occ.id === componentId) {
-          this.occupancyMap.delete(pin.holeId);
-        }
-      }
-    }
+    newAnchorHoleId = this.resolveAnchor(comp, newAnchorHoleId);
+    if (newAnchorHoleId === comp.anchorHoleId) return;
 
+    const problem = this.placementProblem(comp, newAnchorHoleId, componentId);
+    if (problem) {
+      const key = `${problem}|${newAnchorHoleId}`;
+      if (this._lastReject !== key) {
+        this._lastReject = key;
+        this.showToast(problem, 'error');
+      }
+      return;
+    }
+    this._lastReject = null;
+
+    this._releaseComponent(comp);
     comp.anchorHoleId = newAnchorHoleId;
     this.calculatePinPlacements(comp, newAnchorHoleId);
-
-    // Re-register new occupancy
-    for (const pin of comp.pins) {
-      if (pin.holeId && this._isBreadboardHole(pin.holeId)) {
-        this.occupancyMap.set(pin.holeId, { type: 'component', id: componentId, pinId: pin.id });
-      }
-    }
-
+    this._claimComponent(comp);
     this.notify();
   }
 
@@ -368,10 +417,7 @@ export class StateManager {
       return;
     }
 
-    this.snapshot();
-    comp.rotation = (comp.rotation + 90) % 360;
-
-    // Rotate pin relative offsets (90 deg clockwise: (col, row) -> (-row, col))
+    const savedRels = comp.pins.map((p) => ({ relCol: p.relCol, relRow: p.relRow }));
     for (const pin of comp.pins) {
       const oldCol = pin.relCol;
       const oldRow = pin.relRow;
@@ -380,19 +426,33 @@ export class StateManager {
     }
 
     if (comp.anchorHoleId) {
-      // Free old occupancy
-      for (const pin of comp.pins) {
-        if (pin.holeId && this._isBreadboardHole(pin.holeId)) {
-          this.occupancyMap.delete(pin.holeId);
-        }
+      const problem = this.placementProblem(comp, comp.anchorHoleId, componentId);
+      if (problem) {
+        comp.pins.forEach((p, i) => {
+          p.relCol = savedRels[i].relCol;
+          p.relRow = savedRels[i].relRow;
+        });
+        this.showToast(problem, 'error');
+        return;
       }
+    }
+
+    const rotated = comp.pins.map((p) => ({ relCol: p.relCol, relRow: p.relRow }));
+    comp.pins.forEach((p, i) => {
+      p.relCol = savedRels[i].relCol;
+      p.relRow = savedRels[i].relRow;
+    });
+    this.snapshot();
+    comp.pins.forEach((p, i) => {
+      p.relCol = rotated[i].relCol;
+      p.relRow = rotated[i].relRow;
+    });
+    comp.rotation = (comp.rotation + 90) % 360;
+
+    if (comp.anchorHoleId) {
+      this._releaseComponent(comp);
       this.calculatePinPlacements(comp, comp.anchorHoleId);
-      // Re-register
-      for (const pin of comp.pins) {
-        if (pin.holeId && this._isBreadboardHole(pin.holeId)) {
-          this.occupancyMap.set(pin.holeId, { type: 'component', id: componentId, pinId: pin.id });
-        }
-      }
+      this._claimComponent(comp);
     }
     this.notify();
   }
@@ -439,37 +499,25 @@ export class StateManager {
 
   // Maps component pin relative offsets to exact breadboard hole IDs
   calculatePinPlacements(comp, anchorHoleId) {
-    const anchor = this.bb.holes.get(anchorHoleId);
-    if (!anchor) return;
+    const projected = this.projectPins(comp, anchorHoleId);
+    comp.pins.forEach((pin, i) => {
+      pin.holeId = projected[i]?.holeId;
+    });
+  }
 
-    const rowOrder = ['TP', 'TN', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'BP', 'BN'];
-    const anchorRowIndex = rowOrder.indexOf(anchor.rowId);
-
+  _releaseComponent(comp) {
     for (const pin of comp.pins) {
-      const targetCol = anchor.colIndex + pin.relCol;
-      const targetRowIndex = anchorRowIndex + pin.relRow;
+      if (pin.holeId && this._isBreadboardHole(pin.holeId)) {
+        const occ = this.occupancyMap.get(pin.holeId);
+        if (occ && occ.id === comp.id) this.occupancyMap.delete(pin.holeId);
+      }
+    }
+  }
 
-      if (
-        targetCol >= 1 &&
-        targetCol <= this.bb.config.columns &&
-        targetRowIndex >= 0 &&
-        targetRowIndex < rowOrder.length
-      ) {
-        const targetRowId = rowOrder[targetRowIndex];
-        let targetHoleId;
-        if (targetRowId.startsWith('T') || targetRowId.startsWith('B')) {
-          targetHoleId = `${targetRowId}-${targetCol}`;
-        } else {
-          targetHoleId = `${targetCol}-${targetRowId}`;
-        }
-
-        if (this.bb.holes.has(targetHoleId)) {
-          pin.holeId = targetHoleId;
-        } else {
-          pin.holeId = undefined;
-        }
-      } else {
-        pin.holeId = undefined;
+  _claimComponent(comp) {
+    for (const pin of comp.pins) {
+      if (pin.holeId && this._isBreadboardHole(pin.holeId)) {
+        this.occupancyMap.set(pin.holeId, { type: 'component', id: comp.id, pinId: pin.id });
       }
     }
   }

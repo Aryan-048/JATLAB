@@ -13,6 +13,7 @@ import {
 } from '../src/core/ComponentModel.js';
 import { CircuitGraph } from '../src/core/CircuitGraph.js';
 import { createWire } from '../src/core/WireModel.js';
+import { StateManager } from '../src/ui/StateManager.js';
 
 test('BreadboardModel generates full 830-point topology', () => {
   const bb = new BreadboardModel();
@@ -116,6 +117,52 @@ test('CircuitGraph detects shorts and merges connected nets via wires', () => {
   assert.strictEqual(
     issues.some((i) => i.title.includes('Short Circuit')),
     true
+  );
+});
+
+test('A hole accepts one lead or wire end, and a parallel wire uses another hole in the strip', () => {
+  const bb = new BreadboardModel();
+  const state = new StateManager(bb);
+
+  const first = state.addWire('10-A', '18-A');
+  assert.ok(first);
+  const stacked = state.addWire('10-A', '20-A');
+  assert.strictEqual(stacked, null);
+  assert.strictEqual(state.wires.length, 1);
+
+  const parallel = state.addWire('10-B', '18-B');
+  assert.ok(parallel);
+  assert.strictEqual(
+    state.circuitGraph.getNetForHole('10-A'),
+    state.circuitGraph.getNetForHole('10-B')
+  );
+
+  state.startPlacement('resistor', { value: 1000 });
+  assert.strictEqual(state.commitPendingPlacement('10-A'), false);
+
+  state.startPlacement('resistor', { value: 1000 });
+  assert.strictEqual(state.commitPendingPlacement('12-C'), true);
+  const leads = state.components[0].pins.map((p) => p.holeId);
+  const strips = leads.map((id) => bb.holes.get(id).stripId);
+  assert.notStrictEqual(strips[0], strips[1]);
+});
+
+test('A 555 dropped anywhere in a column straddles the gap, one pin per strip', () => {
+  const bb = new BreadboardModel();
+  const state = new StateManager(bb);
+  state.startPlacement('ic_555');
+  assert.strictEqual(state.commitPendingPlacement('20-A'), true);
+  const ic = state.components[0];
+  assert.strictEqual(ic.anchorHoleId, '20-E');
+  const strips = ic.pins.map((p) => bb.holes.get(p.holeId).stripId);
+  assert.strictEqual(new Set(strips).size, ic.pins.length);
+  assert.deepStrictEqual(
+    ic.pins.slice(0, 4).map((p) => p.holeId),
+    ['20-E', '21-E', '22-E', '23-E']
+  );
+  assert.deepStrictEqual(
+    ic.pins.slice(4).map((p) => p.holeId),
+    ['23-F', '22-F', '21-F', '20-F']
   );
 });
 
