@@ -13,6 +13,7 @@ import {
 } from '../src/instruments/InstrumentModel.js';
 import { analyzeCircuit } from '../src/ui/labCheck.js';
 import { LAB_PRESETS, applyLabInstruments, buildLabPreset } from '../src/guides/labPresets.js';
+import { wireColor } from '../src/core/WireModel.js';
 
 function instruments() {
   return {
@@ -31,6 +32,11 @@ for (const labId of Object.keys(LAB_PRESETS)) {
     const inst = instruments();
     buildLabPreset(state, labId);
     applyLabInstruments(inst, labId);
+
+    const colors = new Set(state.wires.map((wire) => wire.color));
+    assert.ok(colors.size >= 3, `${labId} uses only ${[...colors].join(', ')}`);
+    const grounds = state.wires.filter((wire) => /GND|BN-/.test(`${wire.fromHoleId} ${wire.toHoleId}`));
+    assert.ok(grounds.every((wire) => wire.color === wireColor(wire.fromHoleId, wire.toHoleId, 'ground')), 'a ground wire is not black');
 
     const holes = state.components.flatMap((comp) => comp.pins.map((pin) => pin.holeId)).filter(Boolean);
     assert.strictEqual(new Set(holes).size, holes.length, 'a lead shares a hole');

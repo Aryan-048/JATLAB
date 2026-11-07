@@ -4,6 +4,7 @@
  */
 
 import { LAB_REFERENCES } from './labReferences.js';
+import { wireColor } from '../core/WireModel.js';
 import { formatResistance, formatCapacitance, formatInductance } from '../core/ComponentModel.js';
 
 const SYMMETRIC = new Set(['resistor', 'capacitor', 'inductor', 'rheostat']);
@@ -347,7 +348,9 @@ function checkAgainstLab(lab, components, wires, cg, breadboard, instruments, is
     if (!endsPresent(link, matched)) continue;
     if (linkOk(link, flips, matched, cg, instruments)) continue;
     const holes = holesForLink(link, flips, matched, breadboard, components, wires);
-    const action = holes ? { kind: 'wire', from: holes.from, to: holes.to } : null;
+    const action = holes
+      ? { kind: 'wire', from: holes.from, to: holes.to, color: wireColor(holes.from, holes.to, link.name) }
+      : null;
     issues.push(issue('error', `Missing: ${link.name}`,
       `${link.name} is not connected.`,
       action ? 'Fix it for me will add that wire on free holes in the same strips.' : `Draw a wire for: ${link.name}.`,
@@ -700,7 +703,7 @@ function checkProbe(lab, flips, matched, cg, components, wires, breadboard, issu
     const end = existing.toHoleId === 'OSC_CH1' ? 'from' : 'to';
     action = { kind: 'moveWire', wireId: existing.id, end, holeId: free };
   } else if (free) {
-    action = { kind: 'wire', from: 'OSC_CH1', to: free };
+    action = { kind: 'wire', from: 'OSC_CH1', to: free, color: wireColor('OSC_CH1', free, 'scope probe') };
   }
   issues.push(issue('warn', 'Scope CH1 is on the wrong node',
     `CH1 should show ${lab.probe.label}.`,

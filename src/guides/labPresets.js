@@ -4,6 +4,7 @@
  */
 
 import { suggestTimeDiv } from '../ui/labCheck.js';
+import { wireColor } from '../core/WireModel.js';
 
 export const LAB_PRESETS = {
   lab1a: {
@@ -235,7 +236,7 @@ export function buildLabPreset(state, labId) {
     if (!ok) throw new Error(`${preset.name}: could not place ${part.label} at ${part.hole}`);
   }
   for (const wire of preset.wires) {
-    const placed = state.addWire(wire.from, wire.to);
+    const placed = state.addWire(wire.from, wire.to, wireColor(wire.from, wire.to, `${wire.label} ${wire.why}`));
     if (!placed) throw new Error(`${preset.name}: could not wire ${wire.label} (${wire.from} to ${wire.to})`);
   }
   return preset;

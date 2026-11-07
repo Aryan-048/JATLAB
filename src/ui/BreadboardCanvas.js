@@ -3,6 +3,15 @@
  * Parts 1 & 2: Arc wires, proper layering, wire/hole hit priority, fade-wires, end-handle drag
  */
 
+function isLightWire(hex) {
+  const value = String(hex || '').replace('#', '');
+  if (value.length < 6) return false;
+  const r = parseInt(value.slice(0, 2), 16);
+  const g = parseInt(value.slice(2, 4), 16);
+  const b = parseInt(value.slice(4, 6), 16);
+  return (r + g + b) / 3 > 180;
+}
+
 export const HOLE_HIT_RADIUS = 8;
 export const WIRE_HIT_RADIUS = 5;
 
@@ -1194,8 +1203,18 @@ export class BreadboardCanvas {
       ctx.fill();
     }
 
-    // Outer insulation — pointer-events: none equivalent: we use invisible hit areas separately
-    ctx.strokeStyle = wire.color || '#10B981';
+    // A light jumper needs a dark edge or it disappears on the white board.
+    const insulation = wire.color || '#10B981';
+    if (isLightWire(insulation)) {
+      ctx.strokeStyle = '#475569';
+      ctx.lineWidth = 6.5;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(h1.x, h1.y);
+      ctx.quadraticCurveTo(cpX, cpY, h2.x, h2.y);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = insulation;
     ctx.lineWidth = 4.5;
     ctx.lineCap = 'round';
     ctx.shadowColor = 'rgba(0,0,0,0.25)';
@@ -1327,7 +1346,7 @@ export class BreadboardCanvas {
     const p2 = this._guidePoint(ghost.to);
     if (!p1 || !p2) return;
     ctx.save();
-    ctx.strokeStyle = 'rgba(56, 189, 248, 0.95)';
+    ctx.strokeStyle = ghost.color || 'rgba(56, 189, 248, 0.95)';
     ctx.lineWidth = 2.5;
     ctx.setLineDash([6, 5]);
     const midX = (p1.x + p2.x) / 2;

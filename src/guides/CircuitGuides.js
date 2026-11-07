@@ -4,6 +4,7 @@
  */
 
 import { LAB_PRESETS, applyLabInstruments, buildLabPreset } from './labPresets.js';
+import { wireColor, wireColorName } from '../core/WireModel.js';
 
 export const LAB_GUIDES = LAB_PRESETS;
 
@@ -28,14 +29,18 @@ export class CircuitGuides {
       targetHoles: part.holes,
       ghost: null,
     }));
-    const wireSteps = guide.wires.map((wire) => ({
-      kind: 'wire',
-      label: wire.label,
-      instruction: `${wire.label}: ${wire.from} to ${wire.to}. ${wire.why}`,
-      why: wire.why,
-      targetHoles: [wire.from, wire.to].filter((id) => this.state.bb.holes.has(id)),
-      ghost: { from: wire.from, to: wire.to },
-    }));
+    const wireSteps = guide.wires.map((wire) => {
+      const hint = `${wire.label} ${wire.why}`;
+      const colorName = wireColorName(wire.from, wire.to, hint);
+      return {
+        kind: 'wire',
+        label: wire.label,
+        instruction: `${wire.label}: ${wire.from} to ${wire.to}. Use the ${colorName} wire. ${wire.why}`,
+        why: `${wire.why} Color: ${colorName}.`,
+        targetHoles: [wire.from, wire.to].filter((id) => this.state.bb.holes.has(id)),
+        ghost: { from: wire.from, to: wire.to, color: wireColor(wire.from, wire.to, hint) },
+      };
+    });
     return partSteps.concat(wireSteps);
   }
 
@@ -54,7 +59,7 @@ export class CircuitGuides {
     this.container.innerHTML = `
       <div class="guides-panel">
         <div class="guides-header"><strong>Lab experiments</strong></div>
-        <p class="guides-note">Load a reference, then Run Check. A matching build says Circuit OK.</p>
+        <p class="guides-note">Load a reference, then Run Check. Red is supply, black is ground, green is the message, yellow is the carrier, purple is the pulse, orange is timing, blue is the scope, and white is a jumper.</p>
         <div class="guides-list">${cards}</div>
       </div>
       <div id="guide-wizard-modal" class="guide-wizard-modal" style="display:none">

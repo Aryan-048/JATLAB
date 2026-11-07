@@ -157,7 +157,7 @@ export class CircuitChecker {
     } else if (action.kind === 'swapPins') {
       this.state.swapPins(action.componentId, action.pinA, action.pinB);
     } else if (action.kind === 'wire') {
-      this.state.addWire(action.from, action.to);
+      this.state.addWire(action.from, action.to, action.color);
     } else if (action.kind === 'moveWire') {
       this.state.moveWireEnd(action.wireId, action.end, action.holeId);
     } else if (action.kind === 'enable') {
