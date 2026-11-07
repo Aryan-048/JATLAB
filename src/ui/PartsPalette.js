@@ -300,6 +300,7 @@ export class PartsPalette {
         <button class="palette-tab" data-cat="semiconductors">Diodes/BJT</button>
         <button class="palette-tab" data-cat="ics">ICs</button>
         <button class="palette-tab" data-cat="power">Power</button>
+        <button class="palette-tab" data-cat="labs" id="palette-tab-labs">Labs</button>
       </div>
 
       <!-- Part Cards Grid -->
@@ -313,6 +314,18 @@ export class PartsPalette {
         tabs.forEach((t) => t.classList.remove('active'));
         tab.classList.add('active');
         this.activeCategory = tab.dataset.cat;
+        const guides = document.getElementById('circuit-guides-container');
+        const grid = this.container.querySelector('.palette-grid');
+        if (tab.dataset.cat === 'labs') {
+          if (grid) grid.style.display = 'none';
+          if (guides) {
+            guides.style.display = 'flex';
+            grid?.parentElement?.appendChild(guides);
+          }
+          return;
+        }
+        if (grid) grid.style.display = '';
+        if (guides) guides.style.display = 'none';
         this.renderCards();
       });
     });

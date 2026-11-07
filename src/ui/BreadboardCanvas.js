@@ -77,6 +77,7 @@ export class BreadboardCanvas {
     this.hoveredWireId = null;
     this.activeStripHoles = [];
     this.wireStartHole = null;
+    this.guideGhost = null;
     this.mouseCanvasPos = { x: 0, y: 0 };
     this.selectedItem = null; // { type: 'component' | 'wire' | 'hole', id }
     this.tool = 'select'; // 'select' | 'wire'
@@ -514,6 +515,7 @@ export class BreadboardCanvas {
     this.drawWires(ctx);
     this.drawWireEndHandles(ctx);  // Part 2: on top of wires
     this.drawPendingWire(ctx);
+    this.drawGuideGhost(ctx);
     this.drawPendingComponent(ctx);
     this.drawIssueHighlights(ctx); // Part 4: "Show me" highlights
 
@@ -1316,6 +1318,31 @@ export class BreadboardCanvas {
     ctx.stroke();
 
     ctx.restore();
+  }
+
+  drawGuideGhost(ctx) {
+    const ghost = this.guideGhost;
+    if (!ghost) return;
+    const p1 = this._guidePoint(ghost.from);
+    const p2 = this._guidePoint(ghost.to);
+    if (!p1 || !p2) return;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.95)';
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([6, 5]);
+    const midX = (p1.x + p2.x) / 2;
+    const midY = Math.min(p1.y, p2.y) - 48;
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.quadraticCurveTo(midX, midY, p2.x, p2.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  _guidePoint(id) {
+    if (!id) return null;
+    if (this.bb.holes.has(id)) return this.bb.holes.get(id);
+    return this.getTerminalWorldPos(id);
   }
 
   drawPendingComponent(ctx) {

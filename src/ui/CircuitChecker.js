@@ -51,7 +51,12 @@ export class CircuitChecker {
     this.sim.triggerSim();
     const started = Date.now();
     const finish = () => {
-      const waiting = this.sim.worker && this.sim.isSimulating && Date.now() - started < 2500;
+      const simData = this.sim.getLatestData();
+      const scope = window.gatlabApp?.scopeView;
+      const scopeCaughtUp = !scope || !simData || scope.lastDrawnData === simData;
+      const waiting = Date.now() - started < 2500 && (
+        (this.sim.worker && this.sim.isSimulating) || !scopeCaughtUp
+      );
       if (waiting) {
         setTimeout(finish, 40);
         return;

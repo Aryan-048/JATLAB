@@ -52,6 +52,7 @@ export class MNASolver {
 
     const capStates = new Map();
     const indStates = new Map();
+    const deviceOn = new Map();
 
     let ne555_flipflop = false;
     let vco_cap_voltage = 0.0;
@@ -75,6 +76,7 @@ export class MNASolver {
       let xSol = [...vPrev];
       const maxIter = 30;
       let converged = false;
+      this._regionFlip = false;
 
       for (let iter = 0; iter < maxIter; iter++) {
         const A = Array.from({ length: matrixSize }, () => new Array(matrixSize).fill(0));
@@ -119,29 +121,22 @@ export class MNASolver {
 
               const state = indStates.get(comp.id) || { iPrev: 0, vPrev: 0 };
               const I_eq = state.iPrev + G * state.vPrev;
-              this.stampCurrentSource(b, n1, n2, -I_eq);
+              this.stampCurrentSource(b, n1, n2, I_eq);
               break;
             }
 
             case 'diode_1n4007':
             case 'diode_oa79': {
               const isGe = comp.type === 'diode_oa79';
-              const Is = isGe ? 1e-6 : 1e-11;
-              const n = isGe ? 1.1 : 1.5;
-              const nVt = n * this.Vt;
-
+              const von = isGe ? 0.3 : 0.7;
               const vAnode = n1 > 0 ? xSol[n1 - 1] : 0;
               const vCathode = n2 > 0 ? xSol[n2 - 1] : 0;
-              // Part 3: Clamp Vd to prevent exp() overflow
-              let Vd = Math.max(-10, Math.min(1.2, vAnode - vCathode));
-
-              const expVal = Math.exp(Math.min(40, Vd / nVt));
-              const Id = Is * (expVal - 1);
-              const gd = Math.max(this.GMIN, (Is / nVt) * expVal);
-              const Ieq = Id - gd * Vd;
-
+              const on = vAnode - vCathode > von;
+              if (deviceOn.has(comp.id) && deviceOn.get(comp.id) !== on) this._regionFlip = true;
+              deviceOn.set(comp.id, on);
+              const gd = on ? 1.0 : this.GMIN;
               this.stampConductance(A, n1, n2, gd);
-              this.stampCurrentSource(b, n1, n2, Ieq);
+              if (on) this.stampCurrentSource(b, n1, n2, -gd * von);
               break;
             }
 
@@ -153,22 +148,18 @@ export class MNASolver {
 
               const vE = nE > 0 ? xSol[nE - 1] : 0;
               const vB = nB > 0 ? xSol[nB - 1] : 0;
-              const vC = nC > 0 ? xSol[nC - 1] : 0;
-
-              const Vbe = Math.max(-5, Math.min(0.9, vB - vE));
-              const Is = 1e-14;
-              const nVt = 1.0 * this.Vt;
-              const expBe = Math.exp(Math.min(40, Vbe / nVt));
-              const Ibe = Is * (expBe - 1);
-              const gbe = Math.max(this.GMIN, (Is / nVt) * expBe);
-              const Ibe_eq = Ibe - gbe * Vbe;
-
+              const von = 0.7;
+              const on = vB - vE > von;
+              if (deviceOn.has(comp.id) && deviceOn.get(comp.id) !== on) this._regionFlip = true;
+              deviceOn.set(comp.id, on);
+              const gbe = on ? 0.05 : this.GMIN;
               this.stampConductance(A, nB, nE, gbe);
-              this.stampCurrentSource(b, nB, nE, Ibe_eq);
+              if (on) this.stampCurrentSource(b, nB, nE, -gbe * von);
 
               const beta = comp.value || 100;
-              const Ic = Math.max(0, beta * Ibe);
-              this.stampCurrentSource(b, nC, nE, Ic);
+              const gm = on ? beta * gbe : 0;
+              this._stampTransconductance(A, nC, nE, nB, nE, gm);
+              if (on) this.stampCurrentSource(b, nC, nE, -gm * von);
               break;
             }
 
@@ -220,26 +211,29 @@ export class MNASolver {
 
               const vVcc = nVcc > 0 ? xSol[nVcc - 1] : 18;
               const vMod = nMod > 0 ? xSol[nMod - 1] : vVcc;
+              const vSupply = Math.max(vVcc, 1);
 
-              const deltaV = Math.max(0.1, vVcc - vMod);
-              const freqNominal = 4000.0 * (deltaV / (vVcc * 0.2 + 0.1));
+              const deltaV = Math.max(0.1, vSupply - vMod);
+              const freqNominal = 4000.0 * (deltaV / (vSupply * 0.2 + 0.1));
               const currentI = Math.max(1e-6, freqNominal * 0.01e-6 * 2.0);
 
-              if (vco_charging) {
-                vco_cap_voltage += (currentI / 0.01e-6) * dt;
-                if (vco_cap_voltage >= (2 / 3) * vVcc) {
-                  vco_charging = false;
-                }
-              } else {
-                vco_cap_voltage -= (currentI / 0.01e-6) * dt;
-                if (vco_cap_voltage <= (1 / 3) * vVcc) {
-                  vco_charging = true;
+              if (iter === 0 && vVcc > 1) {
+                if (vco_charging) {
+                  vco_cap_voltage += (currentI / 0.01e-6) * dt;
+                  if (vco_cap_voltage >= (2 / 3) * vSupply) {
+                    vco_charging = false;
+                  }
+                } else {
+                  vco_cap_voltage -= (currentI / 0.01e-6) * dt;
+                  if (vco_cap_voltage <= (1 / 3) * vSupply) {
+                    vco_charging = true;
+                  }
                 }
               }
 
-              const triNorm = (vco_cap_voltage - 0.5 * vVcc) / (0.17 * vVcc);
-              const sineVal = Math.sin(triNorm * Math.PI * 0.5);
-              const vSineTarget = 0.5 * vVcc + 2.5 * sineVal;
+              const triNorm = (vco_cap_voltage - 0.5 * vSupply) / (0.17 * vSupply);
+              const sineVal = Number.isFinite(triNorm) ? Math.sin(triNorm * Math.PI * 0.5) : 0;
+              const vSineTarget = vVcc > 1 ? 0.5 * vSupply + 2.5 * sineVal : 0;
 
               const gSine = 1.0 / 50.0;
               this.stampConductance(A, nSine, nGnd, gSine);
@@ -289,15 +283,17 @@ export class MNASolver {
         }
         if (simError) break;
 
-        // Part 3: Newton-Raphson step damping — clamp voltage updates to ±1V per iteration
+        // Limit each Newton step so a switching device cannot run the node voltage away.
         let maxDiff = 0;
         for (let i = 0; i < N; i++) {
           const delta = xNew[i] - xSol[i];
-          const dampedDelta = Math.max(-1.0, Math.min(1.0, delta));
+          const scale = this._regionFlip ? 0.5 : 1;
+          const dampedDelta = Math.max(-20, Math.min(20, delta * scale));
           xNew[i] = xSol[i] + dampedDelta;
           maxDiff = Math.max(maxDiff, Math.abs(dampedDelta));
         }
 
+        this._regionFlip = false;
         xSol = xNew;
         if (maxDiff < 1e-4) {
           converged = true;
@@ -640,6 +636,17 @@ export class MNASolver {
       if (idx === index && name !== '0') return name;
     }
     return index === 0 ? '0' : String(index);
+  }
+
+  _stampTransconductance(A, nOutP, nOutN, nInP, nInN, gm) {
+    if (!gm) return;
+    const add = (row, col, value) => {
+      if (row > 0 && col > 0) A[row - 1][col - 1] += value;
+    };
+    add(nOutP, nInP, gm);
+    add(nOutP, nInN, -gm);
+    add(nOutN, nInP, -gm);
+    add(nOutN, nInN, gm);
   }
 
   getNodeIndex(netName) {

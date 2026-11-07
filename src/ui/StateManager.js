@@ -545,8 +545,8 @@ export class StateManager {
     this.snapshot();
     this.components = [];
     this.wires = [];
-    this.selectedItem = null;
     this.occupancyMap.clear();
+    this.onSelectionChange(null);
     this.notify();
   }
 
